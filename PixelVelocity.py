@@ -24,8 +24,10 @@ clock = pygame.time.Clock()
 
 pygame.display.set_caption("Pixel Velocity")
 
-image = pygame.image.load("images/background.jpg")
+image1= pygame.image.load("images/background.jpg")
+image2 = pygame.image.load("images/road.png")
 
+image2_1 = pygame.transform.smoothscale(image2, (1925, 450))
 is_active = True
 
 while is_active:
@@ -33,8 +35,8 @@ while is_active:
         if event.type == pygame.QUIT:
             is_active = False
 
-    screen.blit(image, (0, 0))
-    pygame.draw.rect(screen, "grey", (0, 500, 1925, 300))
+    screen.blit(image1, (0, 0))
+    screen.blit(image2_1, (0, 500))
 
     pygame.display.flip()
     clock.tick(60)

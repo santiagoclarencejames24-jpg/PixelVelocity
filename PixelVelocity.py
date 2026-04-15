@@ -40,6 +40,7 @@ while is_active:
     screen.blit(image1_1, (0, 0))
     screen.blit(image2_2, (0, 600))
 
+    pygame.draw.rect(screen, "white", (150, 50, 1450, 15))
     pygame.display.flip()
     clock.tick(60)
 

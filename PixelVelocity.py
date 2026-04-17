@@ -18,10 +18,13 @@ pygame.display.set_caption("Pixel Velocity")
 
 image1= pygame.image.load("images/bg.png")
 image2 = pygame.image.load("images/road.png")
+image_continuity = pygame.image.load("images/road.png")
+
 
 image1_1 = pygame.transform.smoothscale(image1, (1925, 1025))
 image2_1 = pygame.transform.smoothscale(image2, (1925, 450))
-image2_2 = pygame.transform.flip(image2_1, 0, 50)
+image_continuity_1 = pygame.transform.smoothscale(image_continuity, (1925, 450))
+
 
 # Two car
 #=======CAR 1=======
@@ -53,6 +56,9 @@ car1_y = 675
 car2_x = 60
 car2_y = 760
 
+road_x = 0
+road_speed =-5
+
 is_active = True
 
 while is_active:
@@ -60,9 +66,13 @@ while is_active:
         if event.type == pygame.QUIT:
             is_active = False
 
-    screen.blit(image1_1, (0, 0))
-    screen.blit(image2_2, (0, 600))
+    road_x += road_speed
+    if road_x < -1925:
+        road_x = 0
 
+    screen.blit(image1_1, (0, 0))
+    screen.blit(image2_1, (road_x, 600))
+    screen.blit(image_continuity_1, (road_x + 1925, 600))
     screen.blit(car1, (car1_x, car1_y))
     screen.blit(car2, (car2_x, car2_y))
 

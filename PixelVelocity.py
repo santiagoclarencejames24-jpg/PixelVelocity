@@ -1,5 +1,7 @@
 import os, pygame, sys, time, math, random
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT']="hide"; pygame.init()
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT']="hide";
+
+pygame.init()
 
 # --- Screen setup ---
 W, H = 1000, 600

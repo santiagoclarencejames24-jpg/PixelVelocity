@@ -18,6 +18,8 @@ game_state, money, new_race = "menu", 500, True
 def load_img(path,size=None,alpha=True):
     img=pygame.image.load(path); img=img.convert_alpha() if alpha else img.convert()
     return pygame.transform.smoothscale(img,size) if size else img
+
+
 progress_bar = load_img("progress_bar.png",(500,40))
 boost_gauge  = load_img("boost_circle.png",(120,120))
 player_frames=[load_img("Car_1.png",(60,120))]
@@ -91,9 +93,12 @@ def scene_draw():
     screen.blit(bg,(0,0)); [screen.blit(road,(road_x+i,H//2)) for i in(0,W)]
     [c.draw(screen,camera_x) for c in(player,enemy)]
     progress_bar_draw()
-    if player.boosting or player.energy<100: boost_draw(player,H//2-150)
-    if enemy.boosting or enemy.energy<100: boost_draw(enemy,H//2+50)
-    if game_over: screen.blit(font.render(winner_text,1,WHITE),font.render(winner_text,1,WHITE).get_rect(center=(W//2,H//2)))
+    if player.boosting or player.energy<100: 
+        boost_draw(player,H//2-150)
+    if enemy.boosting or enemy.energy<100: 
+        boost_draw(enemy,H//2+50)
+    if game_over: 
+        screen.blit(font.render(winner_text,1,WHITE),font.render(winner_text,1,WHITE).get_rect(center=(W//2,H//2)))
 
 # --- Game update ---
 def update(keys):
@@ -111,7 +116,7 @@ def update(keys):
             c.speed,c.energy,c.boosting=8,max(0,c.energy-0.8),True
             if not pygame.mixer.Channel(1).get_busy():
                 pygame.mixer.Channel(1).play(c.boost)
-        else:
+        else:   
             c.speed,c.boosting=4,False
             if pygame.mixer.Channel(1).get_busy():
                 pygame.mixer.Channel(1).stop()
@@ -158,7 +163,8 @@ def select_mode():
         screen.blit(font.render("Press 2: VS Player",1,WHITE),(W//2-200,H//2+50))
         pygame.display.flip()
         for e in pygame.event.get():
-            if e.type==pygame.QUIT: sys.exit()
+            if e.type==pygame.QUIT: 
+                sys.exit()
             if e.type==pygame.KEYDOWN:
                 if e.key==pygame.K_1: mode="AI"; player.name=text_input("Enter Player 1 Name"); enemy.name="AI"; return
                 if e.key==pygame.K_2: mode="Player"; player.name=text_input("Enter Player 1 Name"); enemy.name=text_input("Enter Player 2 Name"); return

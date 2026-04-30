@@ -1,5 +1,3 @@
-# Pixel Velocity — readable version
-# Imports
 import os
 from turtle import right
 import pygame
@@ -15,7 +13,7 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 pygame.init()
 
 # Screen and global variables
-WIDTH, HEIGHT = 1000, 600
+WIDTH, HEIGHT = auto = 1280, 720
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Pixel Velocity")
 clock = pygame.time.Clock()
@@ -410,7 +408,7 @@ def ai_settings_for_difficulty(diff):
     if diff == "Easy":
         return {"speed_mult":0.9,"boost_chance":0.02,"boost_duration":0.6,"reaction":0.9}
     if diff == "Hard":
-        return {"speed_mult":1.15,"boost_chance":0.12,"boost_duration":1.6,"reaction":0.6}
+        return {"speed_mult":1.10,"boost_chance":0.12,"boost_duration":1.6,"reaction":0.6}
     return {"speed_mult":1.0,"boost_chance":0.06,"boost_duration":1.0,"reaction":0.75}
 
 # ---------------------------
@@ -419,6 +417,7 @@ def ai_settings_for_difficulty(diff):
 def update(keys, dt, spacebar_boost=False):
     global camera_x, game_over, winner_text, game_state, ai_difficulty
     if game_over: return
+
     def move(c, up, down, boost_key, force_boost=False):
         c.rect.x += c.speed
         if keys[up]:
@@ -668,18 +667,25 @@ def car_select_menu(two_player=False):
             r = pygame.Rect(x, y, thumb_w, thumb_h); rects.append((r, i))
             if sel_p == i: pygame.draw.rect(screen, (0,200,0), (x-4, y-4, thumb_w+8, thumb_h+8), 3)
             if sel_e == i: pygame.draw.rect(screen, (200,0,0), (x-4, y-4, thumb_w+8, thumb_h+8), 3)
-        screen.blit(sfont.render(f"Selecting: {selecting.upper()}", 1, (255,215,0)), (WIDTH//2 - 100, 100))
-        screen.blit(sfont.render("Click selected car again to confirm selection", 1, (180,180,180)), (WIDTH//2 - 250, HEIGHT-100))
+        screen.blit(sfont.render(f"Selecting: {selecting.upper()}", 1, (255,220,0)), (WIDTH//2 - 100, 100))
+        screen.blit(sfont.render(f"\n Click selected car again to confirm selection", 1, (180,180,180)), (WIDTH//2 - 250, HEIGHT-100))
         pygame.display.flip()
         for e in pygame.event.get():
             if e.type == pygame.QUIT: pygame.quit(); sys.exit()
             if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_ESCAPE: return None
-                if e.key == pygame.K_UP: scroll_y = max(0, scroll_y - scroll_speed)
-                if e.key == pygame.K_DOWN: scroll_y = min(max_scroll, scroll_y + scroll_speed)
-                if e.key == pygame.K_PAGEUP: scroll_y = max(0, scroll_y - visible_h//2)
-                if e.key == pygame.K_PAGEDOWN: scroll_y = min(max_scroll, scroll_y + visible_h//2)
-            if e.type == pygame.MOUSEWHEEL: scroll_y = min(max_scroll, max(0, scroll_y - e.y*30))
+                if e.key == pygame.K_ESCAPE: 
+                    return None
+                if e.key == pygame.K_UP:
+                    scroll_y = max(0, scroll_y - scroll_speed)
+                if e.key == pygame.K_DOWN:
+                    scroll_y = min(max_scroll, scroll_y + scroll_speed)
+                if e.key == pygame.K_PAGEUP:
+                    scroll_y = max(0, scroll_y - visible_h//2)
+                if e.key == pygame.K_PAGEDOWN:
+                    scroll_y = min(max_scroll, scroll_y + visible_h//2)
+            
+            if e.type == pygame.MOUSEWHEEL:
+                scroll_y = min(max_scroll, max(0, scroll_y - e.y*30))
             if e.type == pygame.MOUSEBUTTONDOWN and e.button in (4,5):
                 scroll_y = max(0, scroll_y - 30) if e.button == 4 else min(max_scroll, scroll_y + 30)
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
@@ -709,10 +715,17 @@ def main_menu():
             if e.type == pygame.QUIT: pygame.quit(); sys.exit()
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_1:
+                    # Ask for mode (AI vs Player) and names
+                    chosen_mode, diff, p_name, e_name = select_mode()
+                   
+                        
                     # Car selection first
                     sel = car_select_menu()
                     if sel is None: continue
                     p_img, e_img = sel
+                     # Normalize values:
+                    if chosen_mode is None:
+                        chosen_mode = "AI"
                     # swap visuals for player/enemy
                     swap_car_image(player, p_img)
                     swap_car_image(enemy, e_img)
@@ -721,18 +734,13 @@ def main_menu():
                     chosen_map = map_select_menu()
                     # Ask for track length
                     chosen_length = track_length_menu()
-
-                    # Ask for mode (AI vs Player) and names
-                    chosen_mode, diff, p_name, e_name = select_mode()
-                    # Normalize values:
-                    if chosen_mode is None:
-                        chosen_mode = "AI"
                     # Start the race applying the selections
-                    start_race_with_selection(selected_map_idx=chosen_map, selected_length=chosen_length,
-                                              selected_mode=("AI" if chosen_mode == "AI" else "Player"),
-                                              selected_diff=diff or "Normal",
+                    start_race_with_selection(selected_mode=("AI" if chosen_mode == "AI" else "Player"),
                                               p_name=p_name or player.name,
-                                              e_name=e_name or enemy.name)
+                                              e_name=e_name or enemy.name,
+                                              selected_diff=diff or "Normal",
+                                              selected_map_idx=chosen_map,
+                                              selected_length=chosen_length)
                 if e.key == pygame.K_2:
                     # Options placeholder - you can expand this
                     pass
@@ -740,11 +748,16 @@ def main_menu():
                     pygame.quit(); sys.exit()
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 mx, my = e.pos
+
                 # handle mouse clicks on menu options
                 for i, r in enumerate(rects):
                     if r.collidepoint(mx, my):
                         if i == 0:
                             # Start Game (same flow as above)
+                            chosen_mode, diff, p_name, e_name = select_mode()
+                            if chosen_mode is None:
+                                chosen_mode = "AI"
+
                             sel = car_select_menu()
                             if sel is None: continue
                             p_img, e_img = sel
@@ -752,18 +765,18 @@ def main_menu():
                             swap_car_image(enemy, e_img)
                             chosen_map = map_select_menu()
                             chosen_length = track_length_menu()
-                            chosen_mode, diff, p_name, e_name = select_mode()
-                            if chosen_mode is None:
-                                chosen_mode = "AI"
-                            start_race_with_selection(selected_map_idx=chosen_map, selected_length=chosen_length,
-                                                      selected_mode=("AI" if chosen_mode == "AI" else "Player"),
-                                                      selected_diff=diff or "Normal",
-                                                      p_name=p_name or player.name,
-                                                      e_name=e_name or enemy.name)
+                            
+                            start_race_with_selection(selected_mode=("AI" if chosen_mode == "AI" else "Player"),
+                                              p_name=p_name or player.name,
+                                              e_name=e_name or enemy.name,
+                                              selected_diff=diff or "Normal",
+                                              selected_map_idx=chosen_map,
+                                              selected_length=chosen_length)
                         elif i == 1:
                             pass
                         elif i == 2:
-                            pygame.quit(); sys.exit()
+                            pygame.quit()
+                            sys.exit()
 
 def pause_menu():
     play_music(pause_music)

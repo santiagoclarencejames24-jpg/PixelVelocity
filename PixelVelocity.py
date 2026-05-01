@@ -13,12 +13,20 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 pygame.init()
 
 # Screen and global variables
-WIDTH, HEIGHT = auto = 1280, 720
+try:
+    display_info = pygame.display.Info()
+    WIDTH, HEIGHT = display_info.current_w, display_info.current_h
+except Exception:
+    WIDTH, HEIGHT = 1280, 720
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Pixel Velocity")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont("Arial", 72)
 sfont = pygame.font.SysFont("Arial", 28)
+
+# Volume (default)
+volume = 0.5
+pygame.mixer.music.set_volume(volume)
 
 # Colors
 WHITE = (255, 255, 255)
@@ -406,10 +414,10 @@ def scene_draw():
 # AI settings
 def ai_settings_for_difficulty(diff):
     if diff == "Easy":
-        return {"speed_mult":0.9,"boost_chance":0.02,"boost_duration":0.6,"reaction":0.9}
+        return {"speed_mult":1.30, "boost_chance":0.05, "boost_duration":0.8, "reaction":0.85}
     if diff == "Hard":
-        return {"speed_mult":1.10,"boost_chance":0.12,"boost_duration":1.6,"reaction":0.6}
-    return {"speed_mult":1.0,"boost_chance":0.06,"boost_duration":1.0,"reaction":0.75}
+        return {"speed_mult":1.50, "boost_chance":0.16, "boost_duration":2.0, "reaction":0.55}
+    return {"speed_mult":1.05, "boost_chance":0.08, "boost_duration":1.2, "reaction":0.75}
 
 # ---------------------------
 # Update (player + AI) — now accepts dt and advances animations
@@ -525,11 +533,11 @@ def text_input(prompt):
                 if e.key == pygame.K_BACKSPACE: text = text[:-1]
                 else: text += e.unicode
 
-def draw_options(options, start_x, start_y, spacing=50):
-    rects = []
-    for i, opt in enumerate(options):
-        txt = sfont.render(opt, 1, WHITE); r = txt.get_rect(topleft=(start_x, start_y + i*spacing)); screen.blit(txt, r); rects.append(r)
-    return rects
+# def draw_options(options, start_x, start_y, spacing=50):
+#     rects = []
+#     for i, opt in enumerate(options):
+#         txt = sfont.render(opt, 1, WHITE); r = txt.get_rect(topleft=(start_x, start_y + i*spacing)); screen.blit(txt, r); rects.append(r)
+#     return rects
 
 # Menus and selection dialogs
 def select_mode():
@@ -703,7 +711,70 @@ def car_select_menu(two_player=False):
                         return (p_img, e_img)
                     else: sel_e = clicked
 
-# menus (main, shop, options, pause, postrace) — with swap_car_image used where appropriate
+
+def draw_options(options, start_x, start_y, spacing=50):
+    rects = []
+    for i, opt in enumerate(options):
+        txt = sfont.render(opt, 1, WHITE)
+        r = txt.get_rect(topleft=(start_x, start_y + i*spacing))
+        screen.blit(txt, r)
+        rects.append(r)
+    return rects
+
+
+def draw_options_screen():
+    title = font.render("OPTIONS", True, WHITE)
+    screen.blit(title, (WIDTH//2 - 80, 100))
+    vol_text = font.render(f"Volume: {int(volume*100)}%", True, WHITE)
+    screen.blit(vol_text, (WIDTH//2 - 100, 200))
+    pygame.draw.rect(screen, (100, 100, 100), (200, 300, 400, 10))
+    knob_x = 200 + int(volume * 400)
+    pygame.draw.circle(screen, (0, 255, 0), (knob_x, 305), 10)
+    instr = font.render("← / → to adjust | ESC to go back", True, WHITE)
+    screen.blit(instr, (WIDTH//2 - 220, 400))
+
+
+def options_menu():
+    global volume
+    pygame.display.set_caption("Options Menu")
+    running = True
+    while running:
+        screen.fill(BLACK)
+        draw_options_screen()
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.key == pygame.K_LEFT:
+                    volume = max(0.0, volume - 0.05)
+                    pygame.mixer.music.set_volume(volume)
+                elif event.key == pygame.K_RIGHT:
+                    volume = min(1.0, volume + 0.05)
+                    pygame.mixer.music.set_volume(volume)
+
+# menus (main,options, pause, postrace) — with swap_car_image used where appropriate
+def start_game_flow():
+    chosen_mode, diff, p_name, e_name = select_mode()
+    if chosen_mode is None:
+        chosen_mode = "AI"
+    sel = car_select_menu()
+    if sel is None: return
+    p_img, e_img = sel
+    swap_car_image(player, p_img)
+    swap_car_image(enemy, e_img)
+    chosen_map = map_select_menu()
+    chosen_length = track_length_menu()
+    start_race_with_selection(selected_mode=("AI" if chosen_mode == "AI" else "Player"),
+                              p_name=p_name or player.name,
+                              e_name=e_name or enemy.name,
+                              selected_diff=diff or "Normal",
+                              selected_map_idx=chosen_map,
+                              selected_length=chosen_length)
+
 def main_menu():
     global game_state, MAP_LEN, new_race, mode, ai_difficulty, player, enemy, current_bg_idx, current_bg
     play_music(home_music)
@@ -712,67 +783,27 @@ def main_menu():
         screen.fill(BLACK); screen.blit(font.render("PIXEL VELOCITY", 1, WHITE), (WIDTH//2 - 250, 100))
         rects = draw_options(options, WIDTH//2 - 150, 250); pygame.display.flip()
         for e in pygame.event.get():
-            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+            if e.type == pygame.QUIT: 
+                pygame.quit(); 
+                sys.exit()
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_1:
-                    # Ask for mode (AI vs Player) and names
-                    chosen_mode, diff, p_name, e_name = select_mode()
-                   
-                        
-                    # Car selection first
-                    sel = car_select_menu()
-                    if sel is None: continue
-                    p_img, e_img = sel
-                     # Normalize values:
-                    if chosen_mode is None:
-                        chosen_mode = "AI"
-                    # swap visuals for player/enemy
-                    swap_car_image(player, p_img)
-                    swap_car_image(enemy, e_img)
-
-                    # Ask for map selection (preview then confirm)
-                    chosen_map = map_select_menu()
-                    # Ask for track length
-                    chosen_length = track_length_menu()
-                    # Start the race applying the selections
-                    start_race_with_selection(selected_mode=("AI" if chosen_mode == "AI" else "Player"),
-                                              p_name=p_name or player.name,
-                                              e_name=e_name or enemy.name,
-                                              selected_diff=diff or "Normal",
-                                              selected_map_idx=chosen_map,
-                                              selected_length=chosen_length)
+                    start_game_flow()
                 if e.key == pygame.K_2:
-                    # Options placeholder - you can expand this
+                    options_menu()
                     pass
                 if e.key == pygame.K_3:
                     pygame.quit(); sys.exit()
+
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 mx, my = e.pos
-
                 # handle mouse clicks on menu options
                 for i, r in enumerate(rects):
                     if r.collidepoint(mx, my):
                         if i == 0:
-                            # Start Game (same flow as above)
-                            chosen_mode, diff, p_name, e_name = select_mode()
-                            if chosen_mode is None:
-                                chosen_mode = "AI"
-
-                            sel = car_select_menu()
-                            if sel is None: continue
-                            p_img, e_img = sel
-                            swap_car_image(player, p_img)
-                            swap_car_image(enemy, e_img)
-                            chosen_map = map_select_menu()
-                            chosen_length = track_length_menu()
-                            
-                            start_race_with_selection(selected_mode=("AI" if chosen_mode == "AI" else "Player"),
-                                              p_name=p_name or player.name,
-                                              e_name=e_name or enemy.name,
-                                              selected_diff=diff or "Normal",
-                                              selected_map_idx=chosen_map,
-                                              selected_length=chosen_length)
+                            start_game_flow()
                         elif i == 1:
+                            options_menu()
                             pass
                         elif i == 2:
                             pygame.quit()

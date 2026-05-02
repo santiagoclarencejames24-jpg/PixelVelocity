@@ -25,8 +25,10 @@ font = pygame.font.SysFont("Arial", 72)
 sfont = pygame.font.SysFont("Arial", 28)
 
 # Volume (default)
-volume = 0.5
-pygame.mixer.music.set_volume(volume)
+music_volume = 0.5
+sfx_volume = 0.5
+pygame.mixer.music.set_volume(music_volume)
+
 
 # Colors
 WHITE = (255, 255, 255)
@@ -43,6 +45,10 @@ money = 500
 new_race = True
 ai_difficulty = "Normal"
 
+#animation for the finish line
+finish_visible_last = False
+finish_anim = 0
+finish_line_x = MAP_LEN - 300
 
 # Minimal asset loader with fallback
 def load_img(path, size=None, alpha=True):
@@ -327,12 +333,13 @@ pause_bg_color = (40,40,40); pause_bg_padding = 8
 pause_bg_rect = pygame.Rect(pause_rect.left-pause_bg_padding, pause_rect.top-pause_bg_padding, pause_rect.width+pause_bg_padding*2, pause_rect.height+pause_bg_padding*2)
 
 def reset_game_state():
-    global game_over, new_race, camera_x, ai_difficulty, current_bg
+    global game_over, new_race, camera_x, ai_difficulty, current_bg, finish_line_x
     # Do NOT overwrite current_bg_idx or MAP_LEN here; keep whatever was selected.
     ai_difficulty = ai_difficulty  # keep existing difficulty
     game_over = False
     new_race = True
     camera_x = 0
+    finish_line_x = MAP_LEN - 1000
     # position cars and reset energies/animations
     player.rect.x, player.rect.y = 200, HEIGHT//2-100
     enemy.rect.x, enemy.rect.y = 200, HEIGHT//2+100
@@ -396,13 +403,16 @@ def boost_draw(c, y):
     pygame.draw.arc(screen, color, rect, 0, ang, 6)
 
 def scene_draw():
-    global road_x, current_bg
+    global road_x, current_bg, finish_anim, finish_line_x, finish_visible_last
+    finish_anim = (finish_anim + 1) % 20
     road_x = (road_x + road_speed) % (-WIDTH)
+    finish_line_x += road_speed
     screen.blit(current_bg, (0, 0)); [screen.blit(road, (road_x + i, HEIGHT//2)) for i in (0, WIDTH)]
     [c.draw(screen, camera_x) for c in (player, enemy)]; progress_bar_draw()
     pygame.draw.rect(screen, pause_bg_color, pause_bg_rect, border_radius=6); 
     screen.blit(pause_surf, pause_rect)
 
+    
     if player.boosting or player.energy < 100: 
         boost_draw(player, HEIGHT//2-150)
     if enemy.boosting or enemy.energy < 100: 
@@ -410,13 +420,39 @@ def scene_draw():
     if game_over:
         txt = font.render(winner_text, 1, WHITE)
         screen.blit(txt, txt.get_rect(center=(WIDTH//2, HEIGHT//2)))
+    
+    #finish line animation
+    finish_screen_x = MAP_LEN - camera_x
+    visible = -20 < finish_screen_x < WIDTH + 20
+
+    if visible:
+        # Reset animation if it JUST became visible
+        if not finish_visible_last:
+            finish_anim = 0
+
+        finish_anim = (finish_anim + 1) % 20
+
+        tile_size = 20
+        rows = 450 // tile_size
+
+        for y in range(rows):
+            for x in range(2):
+                color = (255, 255, 255) if (x + y + finish_anim // 5) % 2 == 0 else (0, 0, 0)
+                pygame.draw.rect(screen, color,
+                    (finish_screen_x + x * tile_size,
+                    HEIGHT // 2 + y * tile_size,
+                    tile_size,
+                    tile_size))
+
+    # Save visibility state
+    finish_visible_last = visible
 
 # AI settings
 def ai_settings_for_difficulty(diff):
     if diff == "Easy":
         return {"speed_mult":1.30, "boost_chance":0.05, "boost_duration":0.8, "reaction":0.85}
     if diff == "Hard":
-        return {"speed_mult":1.50, "boost_chance":0.16, "boost_duration":2.0, "reaction":0.55}
+        return {"speed_mult":1.50, "boost_chance":0.12, "boost_duration":2.0, "reaction":0.55}
     return {"speed_mult":1.05, "boost_chance":0.08, "boost_duration":1.2, "reaction":0.75}
 
 # ---------------------------
@@ -505,7 +541,7 @@ def update(keys, dt, spacebar_boost=False):
     else: 
         move(enemy, pygame.K_w, pygame.K_s, pygame.K_v)
         
-    camera_x = max(0, min(player.rect.x - WIDTH//2, MAP_LEN - WIDTH))
+    camera_x = player.rect.x - WIDTH // 2
 
     if player.rect.x >= MAP_LEN - player.rect.w:
         game_over = True; winner_text = f"{player.name} WINS"; game_state = "postrace"; play_music(home_music)
@@ -532,12 +568,6 @@ def text_input(prompt):
                 if e.key == pygame.K_RETURN: return text.strip() or prompt
                 if e.key == pygame.K_BACKSPACE: text = text[:-1]
                 else: text += e.unicode
-
-# def draw_options(options, start_x, start_y, spacing=50):
-#     rects = []
-#     for i, opt in enumerate(options):
-#         txt = sfont.render(opt, 1, WHITE); r = txt.get_rect(topleft=(start_x, start_y + i*spacing)); screen.blit(txt, r); rects.append(r)
-#     return rects
 
 # Menus and selection dialogs
 def select_mode():
@@ -634,11 +664,16 @@ def track_length_menu():
         screen.blit(sfont.render("Choose length or press ESC to cancel. Click outside to go back.", 1, (180,180,180)), (WIDTH//2 - 350, HEIGHT-60))
         pygame.display.flip()
         for e in pygame.event.get():
-            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+            if e.type == pygame.QUIT: 
+                pygame.quit(); 
+                sys.exit()
             if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_1: return lengths[0]
-                if e.key == pygame.K_2: return lengths[1]
-                if e.key == pygame.K_3: return lengths[2]
+                if e.key == pygame.K_1:
+                    return lengths[0]
+                if e.key == pygame.K_2: 
+                    return lengths[1]
+                if e.key == pygame.K_3: 
+                    return lengths[2]
                 if e.key == pygame.K_4:
                     val = text_input("Enter track length in meters")
                     try:
@@ -711,6 +746,15 @@ def car_select_menu(two_player=False):
                         return (p_img, e_img)
                     else: sel_e = clicked
 
+def apply_volumes():
+    pygame.mixer.music.set_volume(music_volume)
+
+    for s in [engine_sound_player, engine_sound_enemy,
+              boost_sound_player, boost_sound_enemy]:
+        try:
+            s.set_volume(sfx_volume)
+        except:
+            pass
 
 def draw_options(options, start_x, start_y, spacing=50):
     rects = []
@@ -721,40 +765,111 @@ def draw_options(options, start_x, start_y, spacing=50):
         rects.append(r)
     return rects
 
-
 def draw_options_screen():
     title = font.render("OPTIONS", True, WHITE)
     screen.blit(title, (WIDTH//2 - 80, 100))
-    vol_text = font.render(f"Volume: {int(volume*100)}%", True, WHITE)
+    vol_text = font.render(f"Volume: {int(music_volume*100)}%", True, WHITE)
     screen.blit(vol_text, (WIDTH//2 - 100, 200))
     pygame.draw.rect(screen, (100, 100, 100), (200, 300, 400, 10))
-    knob_x = 200 + int(volume * 400)
+    knob_x = 200 + int(music_volume * 400)
     pygame.draw.circle(screen, (0, 255, 0), (knob_x, 305), 10)
     instr = font.render("← / → to adjust | ESC to go back", True, WHITE)
     screen.blit(instr, (WIDTH//2 - 220, 400))
 
-
 def options_menu():
-    global volume
-    pygame.display.set_caption("Options Menu")
+    global music_volume, sfx_volume
+
     running = True
+    selected = 0  # 0 = music, 1 = sfx
+
+    dragging = False
+
     while running:
-        screen.fill(BLACK)
-        draw_options_screen()
-        pygame.display.flip()
+        screen.fill((30, 30, 30))
+
+        title = font.render("OPTIONS", True, WHITE)
+        screen.blit(title, (WIDTH//2 - 80, 100))
+
+        # Slider positions
+        bar_x = WIDTH//2 - 150
+        bar_width = 300
+
+        # MUSIC
+        music_text = sfont.render(f"Music Volume: {int(music_volume*100)}%", True, WHITE)
+        screen.blit(music_text, (bar_x, 200))
+
+        pygame.draw.rect(screen, (100,100,100), (bar_x, 240, bar_width, 8))
+        music_knob_x = bar_x + int(music_volume * bar_width)
+        pygame.draw.circle(screen, (0,255,0), (music_knob_x, 244), 10)
+
+        # SFX VOLUME
+        sfx_text = sfont.render(f"SFX Volume: {int(sfx_volume*100)}%", True, WHITE)
+        screen.blit(sfx_text, (bar_x, 300))
+
+        pygame.draw.rect(screen, (100,100,100), (bar_x, 340, bar_width, 8))
+        sfx_knob_x = bar_x + int(sfx_volume * bar_width)
+        pygame.draw.circle(screen, (0,255,0), (sfx_knob_x, 344), 10)
+
+        screen.blit(sfont.render("Drag slider or scroll mouse", True, WHITE),
+                    (WIDTH//2 - 150, 420))
+
+        pygame.display.update()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
-                sys.exit()
+                exit()
+
+            # CLICK
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                mx, my = event.pos
+
+                # Check if clicking near music slider
+                if 230 < my < 260:
+                    selected = 0
+                    dragging = True
+
+                # Check if clicking near sfx slider
+                elif 330 < my < 360:
+                    selected = 1
+                    dragging = True
+
+                # Mouse wheel
+                if event.button == 4:  # scroll up
+                    if selected == 0:
+                        music_volume = min(1.0, music_volume + 0.05)
+                    else:
+                        sfx_volume = min(1.0, sfx_volume + 0.05)
+                    apply_volumes()
+
+                if event.button == 5:  # scroll down
+                    if selected == 0:
+                        music_volume = max(0.0, music_volume - 0.05)
+                    else:
+                        sfx_volume = max(0.0, sfx_volume - 0.05)
+                    apply_volumes()
+
+            # RELEASE
+            if event.type == pygame.MOUSEBUTTONUP:
+                dragging = False
+
+            # DRAG
+            if event.type == pygame.MOUSEMOTION and dragging:
+                mx, my = event.pos
+                value = (mx - bar_x) / bar_width
+                value = max(0.0, min(1.0, value))
+
+                if selected == 0:
+                    music_volume = value
+                else:
+                    sfx_volume = value
+
+                apply_volumes()
+
+            # EXIT
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_LEFT:
-                    volume = max(0.0, volume - 0.05)
-                    pygame.mixer.music.set_volume(volume)
-                elif event.key == pygame.K_RIGHT:
-                    volume = min(1.0, volume + 0.05)
-                    pygame.mixer.music.set_volume(volume)
 
 # menus (main,options, pause, postrace) — with swap_car_image used where appropriate
 def start_game_flow():
@@ -774,6 +889,19 @@ def start_game_flow():
                               selected_diff=diff or "Normal",
                               selected_map_idx=chosen_map,
                               selected_length=chosen_length)
+
+def draw_finish_line(tile_size=20, cols=6, rows=4, offset=0):
+    surf = pygame.Surface((cols * tile_size, rows * tile_size))
+    colors = [(255, 255, 255), (0, 0, 0)]
+
+    for y in range(rows):
+        for x in range(cols):
+            # checker pattern + animation offset
+            color_index = (x + y + offset) % 2
+            rect = (x * tile_size, y * tile_size, tile_size, tile_size)
+            pygame.draw.rect(surf, colors[color_index], rect)
+
+    return surf
 
 def main_menu():
     global game_state, MAP_LEN, new_race, mode, ai_difficulty, player, enemy, current_bg_idx, current_bg
@@ -815,6 +943,7 @@ def pause_menu():
         screen.fill(BLACK); screen.blit(font.render("PAUSED", 1, WHITE), (WIDTH//2 - 150, HEIGHT//2 - 80))
         screen.blit(sfont.render("Press P to resume or ESC to quit to menu", 1, (200,200,200)), (WIDTH//2 - 260, HEIGHT//2 + 20))
         pygame.display.flip()
+
         for e in pygame.event.get():
             if e.type == pygame.QUIT: pygame.quit(); sys.exit()
             if e.type == pygame.KEYDOWN:

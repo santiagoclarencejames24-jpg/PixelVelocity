@@ -221,6 +221,7 @@ class Car:
         self.engine = engine
         self.boost = boost
 
+        self.trail = [] 
         # movement / energy
         self.speed = 4
         self.energy = 100
@@ -280,7 +281,14 @@ class Car:
             else:
                 # clamp to last frame if not looping
                 self.anim_index = float(len(frames) - 1)
+        
+        if self.boosting:
+            self.trail.append((self.rect.x, self.rect.y))
 
+            if len(self.trail) > 10:
+                self.trail.pop(0)
+        else:
+            self.trail.clear()
     def current_frame(self):
         frames = self.boost_frames if (self.boosting and self.boost_frames) else self.idle_frames
         if not frames:
@@ -294,8 +302,34 @@ class Car:
         return frames[idx]
 
     def draw(self, surf, cx):
+        for i, (tx, ty) in enumerate(self.trail):
+            alpha = int(255 * (i / len(self.trail)))  # fade effect
+            trail_surf = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+            trail_surf.fill((0, 200, 255, alpha))  # cyan trail
+            surf.blit(trail_surf, (tx - cx, ty))
+
+        if self.boosting:
+            flame_w = 20
+            flame_h = self.rect.height // 2
+
+            flame = pygame.Surface((flame_w, flame_h), pygame.SRCALPHA)
+
+            # outer flame (blue)
+            pygame.draw.ellipse(flame, (0, 150, 255, 180), flame.get_rect())
+
+            # inner flame (white)
+            inner_rect = flame.get_rect().inflate(-10, -10)
+            pygame.draw.ellipse(flame, (255, 255, 255, 200), inner_rect)
+
+            surf.blit(flame, (
+                self.rect.x - cx - flame_w + 5,  # position behind car
+                self.rect.y + self.rect.height // 4
+            ))
+
         surf.blit(self.current_frame(), (self.rect.x - cx, self.rect.y))
-        surf.blit(sfont.render(self.name, 1, WHITE), (self.rect.x - cx, self.rect.y - 25))
+
+        surf.blit(sfont.render(self.name, 1, WHITE),
+                (self.rect.x - cx, self.rect.y - 25))
 
 # ---------------------------
 # Create player and enemy with source filenames
@@ -404,7 +438,6 @@ def boost_draw(c, y):
 
 def scene_draw():
     global road_x, current_bg, finish_anim, finish_line_x, finish_visible_last
-    finish_anim = (finish_anim + 1) % 20
     road_x = (road_x + road_speed) % (-WIDTH)
     finish_line_x += road_speed
     screen.blit(current_bg, (0, 0)); [screen.blit(road, (road_x + i, HEIGHT//2)) for i in (0, WIDTH)]
@@ -426,11 +459,10 @@ def scene_draw():
     visible = -20 < finish_screen_x < WIDTH + 20
 
     if visible:
-        # Reset animation if it JUST became visible
         if not finish_visible_last:
             finish_anim = 0
-
         finish_anim = (finish_anim + 1) % 20
+
 
         tile_size = 20
         rows = 450 // tile_size
@@ -502,23 +534,33 @@ def update(keys, dt, spacebar_boost=False):
         ai_car.base_speed = 4 * params["speed_mult"]
         ai_car.boost_speed = 8 * params["speed_mult"]
         ai_car.rect.x += ai_car.base_speed
-        if random.random() > params["reaction"]:
-            ai_car.rect.y += -3 if target_car.rect.y < ai_car.rect.y else 3 if target_car.rect.y > ai_car.rect.y else 0
+        dy = target_car.rect.y - ai_car.rect.y
+        ai_car.rect.y += dy * 0.05  # smooth follow
+
         dist = (target_car.rect.x - ai_car.rect.x)
         behind_factor = 1.0 if dist > 0 else 0.6
-        boost_prob = params["boost_chance"] * behind_factor
+        distance = target_car.rect.x - ai_car.rect.x
+
+        if distance > 0:
+            boost_prob = 0.15
+        else:
+            boost_prob = 0.03
+
         now = time.time()
+
         if now - ai_car.last_boost_time >= ai_car.boost_cooldown and ai_car.energy > 10 and random.random() < boost_prob:
             ai_car.boosting = True
             ai_car.speed = ai_car.boost_speed
             ai_car.energy = max(0, ai_car.energy - 1.2 * params["boost_duration"] * 10)
             ai_car.last_boost_time = now
             ai_car.boost_cooldown = params["boost_duration"] + 0.8
+
             try:
                 pygame.mixer.Channel(1).play(ai_car.boost)
             except Exception:
                 pass
             ai_car.start_boost_animation(loop_while_holding=True)
+
         if ai_car.boosting:
             ai_car.energy = max(0, ai_car.energy - 0.6)
             if random.random() < 0.02:
@@ -553,8 +595,19 @@ def update(keys, dt, spacebar_boost=False):
 # UI / input helpers (unchanged)
 def countdown():
     for i in ["READY", "SET", "GO!"]:
-        screen.fill(BLACK); screen.blit(font.render(i, 1, WHITE), font.render(i, 1, WHITE).get_rect(center=(WIDTH//2, HEIGHT//2)))
-        pygame.display.flip(); time.sleep(1)
+        screen.fill(BLACK)
+        text = font.render(i, 1, WHITE)
+        screen.blit(text, text.get_rect(center=(WIDTH//2, HEIGHT//2)))
+
+        # 🔊 play sound
+        try:
+            beep = pygame.mixer.Sound("sound effects/beep.wav")
+            beep.play()
+        except:
+            pass
+
+        pygame.display.flip()
+        time.sleep(1)
 
 def text_input(prompt):
     text = ""
@@ -572,41 +625,78 @@ def text_input(prompt):
 # Menus and selection dialogs
 def select_mode():
     options = ["1. VS AI", "2. VS Player"]
+
     while True:
-        screen.fill(BLACK); screen.blit(font.render("Choose Mode", 1, WHITE), (WIDTH//2 - 200, HEIGHT//2 - 160))
-        rects = draw_options(options, WIDTH//2 - 100, HEIGHT//2 - 60, spacing=80); pygame.display.flip()
+        screen.fill(BLACK)
+        screen.blit(font.render("Choose Mode", True, WHITE),
+                    (WIDTH//2 - 200, HEIGHT//2 - 160))
+
+        rects = draw_options(options, WIDTH//2 - 100, HEIGHT//2 - 60, spacing=80)
+        pygame.display.flip()
+
         for e in pygame.event.get():
-            if e.type == pygame.QUIT: sys.exit()
+            if e.type == pygame.QUIT:
+                sys.exit()
+
             if e.type == pygame.KEYDOWN:
+
                 if e.key == pygame.K_1:
-                    diff = difficulty_menu() or "Normal"; name = text_input("Enter Player 1 Name"); return ("AI", diff, name, "AI")
+                    diff = difficulty_menu()
+
+                    if diff == "Cancel":
+                        return None
+
+                    name = text_input("Enter Player 1 Name")
+                    return ("AI", diff, name, "AI")
+
                 if e.key == pygame.K_2:
-                    n1 = text_input("Enter Player 1 Name"); n2 = text_input("Enter Player 2 Name"); return ("Player", "Normal", n1, n2)
+                    n1 = text_input("Enter Player 1 Name")
+                    n2 = text_input("Enter Player 2 Name")
+                    return ("Player", "Normal", n1, n2)
+
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 mx, my = e.pos
+
                 if rects[0].collidepoint(mx, my):
-                    diff = difficulty_menu() or "Normal"; name = text_input("Enter Player 1 Name"); return ("AI", diff, name, "AI")
+                    diff = difficulty_menu()
+
+                    if diff == "Cancel":
+                        return None
+
+                    name = text_input("Enter Player 1 Name")
+                    return ("AI", diff, name, "AI")
+
                 if rects[1].collidepoint(mx, my):
-                    n1 = text_input("Enter Player 1 Name"); n2 = text_input("Enter Player 2 Name"); return ("Player", "Normal", n1, n2)
+                    n1 = text_input("Enter Player 1 Name")
+                    n2 = text_input("Enter Player 2 Name")
+                    return ("Player", "Normal", n1, n2)
 
 def difficulty_menu():
     options = ["1. Easy", "2. Normal", "3. Hard", "4. Cancel"]
     while True:
         screen.fill(BLACK); screen.blit(font.render("Select AI Difficulty", 1, WHITE), (WIDTH//2 - 300, 40))
+
         rects = draw_options(options, WIDTH//2 - 150, 200); pygame.display.flip()
+        pygame.display.flip()
+
         for e in pygame.event.get():
-            if e.type == pygame.QUIT: sys.exit()
+            if e.type == pygame.QUIT:
+                sys.exit()
             if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_1: return "Easy"
-                if e.key == pygame.K_2: return "Normal"
-                if e.key == pygame.K_3: return "Hard"
+                if e.key == pygame.K_1:
+                    return "Easy"
+                if e.key == pygame.K_2:
+                    return "Normal"
+                if e.key == pygame.K_3: 
+                    return "Hard"
                 if e.key == pygame.K_4 or e.key == pygame.K_ESCAPE:
-                    return main_menu()
+                    return "Cancel"
+            
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 mx, my = e.pos
                 for i, r in enumerate(rects):
                     if r.collidepoint(mx, my):
-                        return ["Easy", "Normal", "Hard", "Cancel"][i]if i == 4 else main_menu()
+                            return options[i].split(". ")[1]
 
 def map_select_menu():
     global current_bg_idx, current_bg
@@ -633,7 +723,8 @@ def map_select_menu():
         for e in pygame.event.get():
             if e.type == pygame.QUIT: pygame.quit(); sys.exit()
             if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_ESCAPE: return None
+                if e.key == pygame.K_ESCAPE:
+                    return None
                 if pygame.K_1 <= e.key <= pygame.K_9:
                     idx = e.key - pygame.K_1
                     if 0 <= idx < len(bg_images): current_bg_idx = idx; current_bg = bg_images[idx]; return idx
@@ -759,12 +850,21 @@ def apply_volumes():
 
 def draw_options(options, start_x, start_y, spacing=50):
     rects = []
+    mx, my = pygame.mouse.get_pos()
+
     for i, opt in enumerate(options):
         txt = sfont.render(opt, 1, WHITE)
         r = txt.get_rect(topleft=(start_x, start_y + i*spacing))
+
+        # 🔥 Hover effect
+        if r.collidepoint(mx, my):
+            pygame.draw.rect(screen, (80, 80, 80), r.inflate(20, 10), border_radius=5)
+
         screen.blit(txt, r)
         rects.append(r)
+
     return rects
+
 
 def draw_options_screen():
     title = font.render("OPTIONS", True, WHITE)
@@ -874,22 +974,37 @@ def options_menu():
 
 # menus (main,options, pause, postrace) — with swap_car_image used where appropriate
 def start_game_flow():
-    chosen_mode, diff, p_name, e_name = select_mode()
-    if chosen_mode is None:
-        chosen_mode = "AI"
+    result = select_mode()
+
+    if result is None:
+        return  
+
+    chosen_mode, diff, p_name, e_name = result
+
     sel = car_select_menu()
-    if sel is None: return
+    if sel is None:
+        return
+
     p_img, e_img = sel
     swap_car_image(player, p_img)
     swap_car_image(enemy, e_img)
+
     chosen_map = map_select_menu()
+    if chosen_map is None:
+        return
+
     chosen_length = track_length_menu()
-    start_race_with_selection(selected_mode=("AI" if chosen_mode == "AI" else "Player"),
-                              p_name=p_name or player.name,
-                              e_name=e_name or enemy.name,
-                              selected_diff=diff or "Normal",
-                              selected_map_idx=chosen_map,
-                              selected_length=chosen_length)
+    if chosen_length is None:
+        return
+
+    start_race_with_selection(
+        selected_mode=("AI" if chosen_mode == "AI" else "Player"),
+        p_name=p_name or player.name,
+        e_name=e_name or enemy.name,
+        selected_diff=diff or "Normal",
+        selected_map_idx=chosen_map,
+        selected_length=chosen_length
+    )
 
 def draw_finish_line(tile_size=20, cols=6, rows=4, offset=0):
     surf = pygame.Surface((cols * tile_size, rows * tile_size))
@@ -907,10 +1022,10 @@ def draw_finish_line(tile_size=20, cols=6, rows=4, offset=0):
 def main_menu():
     global game_state, MAP_LEN, new_race, mode, ai_difficulty, player, enemy, current_bg_idx, current_bg
     play_music(home_music)
-    options = ["1. Start Game", "2. Options", "3. Quit"]
+    menu_options = ["1. Start Game", "2. Options", "3. Quit"]
     while game_state == "menu":
         screen.fill(BLACK); screen.blit(font.render("PIXEL VELOCITY", 1, WHITE), (WIDTH//2 - 250, 100))
-        rects = draw_options(options, WIDTH//2 - 150, 250); pygame.display.flip()
+        rects = draw_options(menu_options, WIDTH//2 - 150, 250); pygame.display.flip()
         for e in pygame.event.get():
             if e.type == pygame.QUIT: 
                 pygame.quit(); 

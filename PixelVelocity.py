@@ -600,12 +600,13 @@ def difficulty_menu():
                 if e.key == pygame.K_1: return "Easy"
                 if e.key == pygame.K_2: return "Normal"
                 if e.key == pygame.K_3: return "Hard"
-                if e.key == pygame.K_4 or e.key == pygame.K_ESCAPE: return None
+                if e.key == pygame.K_4 or e.key == pygame.K_ESCAPE:
+                    return main_menu()
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 mx, my = e.pos
                 for i, r in enumerate(rects):
                     if r.collidepoint(mx, my):
-                        return ["Easy", "Normal", "Hard", None][i]
+                        return ["Easy", "Normal", "Hard", "Cancel"][i]if i == 4 else main_menu()
 
 def map_select_menu():
     global current_bg_idx, current_bg

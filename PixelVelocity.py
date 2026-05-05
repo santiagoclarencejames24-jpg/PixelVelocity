@@ -50,6 +50,207 @@ finish_visible_last = False
 finish_anim = 0
 finish_line_x = MAP_LEN - 300
 
+#Road geometry constants
+ROAD_TOP =HEIGHT//2    #y where road map surface start
+ROAD_HEIGHT = 450       #height of road band
+ROAD_BOTTOM = ROAD_TOP + ROAD_HEIGHT
+BARRIER_THICKNESS = 18        # pixel height of each barrier strip
+
+
+#OBSTACLE SYSTEM
+OBSTACLE_TYPE =["Oil","cone","tire","bumb"]
+class Obstacle:
+    """A hazard placed at a fixed worl x position on the road. On collision it applies a speed/energy
+    penalty to the car."""
+
+    def __init__(self,world_x,obs_type=None):
+        self.world_x = world_x
+        self.obs_type = obs_type or random.choice(OBSTACLE_TYPE)
+
+        # Random lane position inside the road with margin so its not on the barrier
+        margin = 40
+        self.world_y = random.randint(ROAD_TOP + margin, ROAD_BOTTOM - margin - 30)
+        self.active = True        # false after a car hits and destroy it
+        self.hit_cooldown = {}     # car id timestamp, prevent repeated hits
+
+        # Size varies by type
+        size = {"oil": (80, 40), "cone": (24, 36), "tire": (32, 32), "bumb": (60, 16), "bumbp": (60, 16)}
+        self.w, self.h = size.get(self.obs_type.lower(), (40, 30))
+        self.surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+
+        # Oil slick surface (semi-transparent)
+        if self.obs_type.lower() == "oil":
+            for i in range(5):
+                r = int(60 + i * 30)
+                g = int(20 + i * 15)
+                b = int(80 + i * 25)
+                pygame.draw.ellipse(self.surf, (r, g, b, 80), (i * 8, i * 3, self.w - i * 16,
+                    self.h - i * 6), 1)
+
+    @property
+    def rect(self):
+        return pygame.Rect(self.world_x, self.world_y, self.w, self.h)
+
+    def can_hit(self, car):
+        now = time.time()
+        last = self.hit_cooldown.get(id(car), 0)
+        return now - last > 1.5      # 1.5s cooldown per car
+    
+    def apply_hit(self,car):
+        """Apply penalty and mark cooldown."""
+        self.hit_cooldown[id(car)] = time.time()
+        effects ={
+            "oil": {"speed_mult":0.4, "energy_drain":5, "duration":1.2},
+            "cone": {"speed_mult":0.6, "energy_drain":8, "duration":0.6},
+            "tire": {"speed_mult":0.5, "energy_drain":12, "duration":0.8},
+            "bumb": {"speed_mult":0.7, "energy_drain":3, "duration":0.4},
+        }
+
+        eff = effects.get(self.obs_type.lower(), {"speed_mult":0.6, "energy_drain":5, "duration":0.8})
+
+        # Slow car temporaryly
+        original_speed = car.speed
+        car.speed = max(1, car.speed * eff["speed_mult"])
+        car.energy = max(0, car.energy - eff["energy_drain"])
+
+        # Schedule speed reset after duration
+        car.slow_until = time.time() + eff["duration"]
+        car.slow_factor = eff["speed_mult"]
+
+        #Destroy cones/tire on hit;oil bumb perist
+        if self.obs_type in ("cone","tire"):
+            self.active = False
+
+    def draw(self, surf, camera_x):
+        sx = self.world_x - camera_x  # screen x
+        sy = self.world_y
+
+        if not (-self.w < sx < WIDTH + self.w):
+            return  # off screen
+
+        if self.obs_type == "oil":
+            surf.blit(self.surf, (sx, sy))
+
+        elif self.obs_type == "cone":
+            # Traffic cone shape
+            cx = sx + self.w // 2
+            # base
+            pygame.draw.rect(surf, (220, 220, 220), (sx + 4, sy + self.h - 8, self.w - 8, 8))
+
+            # body
+            points = [(cx, sy), (sx, sy + self.h - 8), (sx + self.w, sy + self.h - 8)]
+            pygame.draw.polygon(surf, CONE_COLOR, points)
+
+            # white stripe
+            stripe_y = sy + self.h // 2
+            pygame.draw.polygon(
+                surf, WHITE,
+                [(cx - 6, stripe_y - 3),
+                 (cx + 6, stripe_y - 3),
+                 (sx + self.w - 4, stripe_y + 2),
+                 (sx + 4, stripe_y + 2)]
+            )
+
+        elif self.obs_type == "tire":
+            cx, cy = sx + self.w // 2, sy + self.h // 2
+            r = self.w // 2
+            pygame.draw.circle(surf, (80, 80, 80), (cx, cy), r, 3)
+            pygame.draw.circle(surf, (60, 60, 60), (cx, cy), r // 2)
+
+        elif self.obs_type == "bumb":
+            # Speed bumb - flat yellow/black stripe bar
+            bumpsurf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+            strip_w = 10
+            for i in range(self.w // strip_w + 1):
+                color = YELLOW if i % 2 == 0 else BLACK
+                pygame.draw.rect(bumpsurf, color, (i * strip_w, 0, strip_w, self.h))
+            surf.blit(bumpsurf, (sx, sy))
+            pygame.draw.rect(surf, (180, 140, 0), (sx, sy, self.w, self.h), 2)
+
+
+def generate_obstacles(map_len, count=40):
+    """
+    Spread obstacle across the map, keeping the first
+    800px clear (start zone) and last 600px clear (finish zone).
+    """
+
+    obstacles = []
+    safe_start = 800
+    safe_end = map_len - 600
+    if safe_end <= safe_start or count <= 0:
+        return obstacles
+
+    # Distribution evenly with slight randomness
+    segment = (safe_end - safe_start) / count
+    for i in range(count):
+        world_x = safe_start + i * segment + random.uniform(0, segment * 0.8)
+        obs_type = random.choices(OBSTACLE_TYPES, weights=[30, 35, 20, 15], k=1)[0]
+        obstacles.append(Obstacle(int(world_x), obs_type))
+
+    return obstacles
+# Global obstacle list (regenerated each race)
+obstacles = []
+
+def check_obstacle_collisions(car):
+    """Check car rect (world-space) vs all active obstacles."""
+    car_world_rect = pygame.Rect(car.rect.x, car.rect.y,
+                                  car.rect.width, car.rect.height)
+    for obs in obstacles:
+        if not obs.active:
+            continue
+        if car_world_rect.colliderect(obs.rect) and obs.can_hit(car):
+            obs.apply_hit(car)
+
+def restore_speed_after_slow(car):
+    """Call every frame to let cars recover from obstacle slowdowns."""
+    if hasattr(car, 'slow_until') and time.time() < car.slow_until:
+        # keep the slowed speed
+        pass
+    elif hasattr(car, 'slow_until') and time.time() >= car.slow_until:
+        # restore — actual speed is managed by move(); just clear the flag
+        del car.slow_until
+        if hasattr(car, 'slow_factor'):
+            del car.slow_factor
+
+# BARRIER DRAWING
+
+BARRIER_SEGMENT_W = 40   # width of one barrier block
+
+def draw_barriers(surf, camera_x):
+    """
+    Draw animated red/white striped barriers at the top and bottom road edges.
+    They scroll with the camera and have a 3-D lip effect.
+    """
+    anim_offset = int(camera_x // 4) % (BARRIER_SEGMENT_W * 2)
+
+    for edge_y, is_top in [(ROAD_TOP, True), (ROAD_BOTTOM - BARRIER_THICKNESS, False)]:
+        # Draw enough segments to fill the screen
+        start_x = -(anim_offset % (BARRIER_SEGMENT_W * 2))
+        x = start_x
+        seg_idx = int(camera_x // BARRIER_SEGMENT_W)
+
+        while x < WIDTH:
+            # Alternate red/white
+            color = RED if (seg_idx % 2 == 0) else (240, 240, 240)
+            # Main barrier block
+            pygame.draw.rect(surf, color,
+                             (x, edge_y, BARRIER_SEGMENT_W, BARRIER_THICKNESS))
+            # Dark divider line
+            pygame.draw.rect(surf, DARK_GRAY, (x, edge_y, 2, BARRIER_THICKNESS))
+            # 3-D highlight on top of top barrier / shadow on bottom barrier
+            if is_top:
+                pygame.draw.rect(surf, WHITE, (x, edge_y, BARRIER_SEGMENT_W, 3))
+            else:
+                pygame.draw.rect(surf, DARK_GRAY, (x, edge_y + BARRIER_THICKNESS - 3,
+                                  BARRIER_SEGMENT_W, 3))
+            x += BARRIER_SEGMENT_W
+            seg_idx += 1
+
+    # Thin reflective top edge line
+    pygame.draw.line(surf, (255, 200, 200), (0, ROAD_TOP), (WIDTH, ROAD_TOP), 2)
+    pygame.draw.line(surf, (200, 200, 200),
+                     (0, ROAD_BOTTOM), (WIDTH, ROAD_BOTTOM), 2)
+
 # Minimal asset loader with fallback
 def load_img(path, size=None, alpha=True):
     try:

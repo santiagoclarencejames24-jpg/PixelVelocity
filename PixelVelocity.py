@@ -33,6 +33,9 @@ pygame.mixer.music.set_volume(music_volume)
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
+YELLOW = (255, 255, 0)
+DARK_GRAY = (50, 50, 50)
+RED = (220, 20, 60)
 
 # Game state variables
 MAP_LEN = 20000
@@ -56,16 +59,25 @@ ROAD_HEIGHT = 450       #height of road band
 ROAD_BOTTOM = ROAD_TOP + ROAD_HEIGHT
 BARRIER_THICKNESS = 18        # pixel height of each barrier strip
 
+#barrier
+BARRIER_SEGMENT_W = 40   # width of one barrier block
 
-#OBSTACLE SYSTEM
-OBSTACLE_TYPE =["Oil","cone","tire","bumb"]
+# Global obstacle list (regenerated each race)
+obstacles = []
+
+
+OBSTACLE = pygame.image.load("images/cone.png")
+OBSTACLE = pygame.transform.smoothscale(OBSTACLE, (50, 50))
+
 class Obstacle:
-    """A hazard placed at a fixed worl x position on the road. On collision it applies a speed/energy
-    penalty to the car."""
+    # A hazard placed at a fixed worl x position on the road. On collision it applies a speed/energy
+    # penalty to the car.
 
     def __init__(self,world_x,obs_type=None):
         self.world_x = world_x
-        self.obs_type = obs_type or random.choice(OBSTACLE_TYPE)
+        self.obs_type = obs_type or "cone"
+        self.w = 30
+        self.h = 30
 
         # Random lane position inside the road with margin so its not on the barrier
         margin = 40
@@ -73,19 +85,6 @@ class Obstacle:
         self.active = True        # false after a car hits and destroy it
         self.hit_cooldown = {}     # car id timestamp, prevent repeated hits
 
-        # Size varies by type
-        size = {"oil": (80, 40), "cone": (24, 36), "tire": (32, 32), "bumb": (60, 16), "bumbp": (60, 16)}
-        self.w, self.h = size.get(self.obs_type.lower(), (40, 30))
-        self.surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
-
-        # Oil slick surface (semi-transparent)
-        if self.obs_type.lower() == "oil":
-            for i in range(5):
-                r = int(60 + i * 30)
-                g = int(20 + i * 15)
-                b = int(80 + i * 25)
-                pygame.draw.ellipse(self.surf, (r, g, b, 80), (i * 8, i * 3, self.w - i * 16,
-                    self.h - i * 6), 1)
 
     @property
     def rect(self):
@@ -97,13 +96,10 @@ class Obstacle:
         return now - last > 1.5      # 1.5s cooldown per car
     
     def apply_hit(self,car):
-        """Apply penalty and mark cooldown."""
+        # Apply penalty and mark cooldown.
         self.hit_cooldown[id(car)] = time.time()
         effects ={
-            "oil": {"speed_mult":0.4, "energy_drain":5, "duration":1.2},
-            "cone": {"speed_mult":0.6, "energy_drain":8, "duration":0.6},
-            "tire": {"speed_mult":0.5, "energy_drain":12, "duration":0.8},
-            "bumb": {"speed_mult":0.7, "energy_drain":3, "duration":0.4},
+            "cone": {"speed_mult":0.6, "energy_drain":8, "duration":0.6}
         }
 
         eff = effects.get(self.obs_type.lower(), {"speed_mult":0.6, "energy_drain":5, "duration":0.8})
@@ -118,7 +114,7 @@ class Obstacle:
         car.slow_factor = eff["speed_mult"]
 
         #Destroy cones/tire on hit;oil bumb perist
-        if self.obs_type in ("cone","tire"):
+        if self.obs_type in ("cone"):
             self.active = False
 
     def draw(self, surf, camera_x):
@@ -128,128 +124,55 @@ class Obstacle:
         if not (-self.w < sx < WIDTH + self.w):
             return  # off screen
 
-        if self.obs_type == "oil":
-            surf.blit(self.surf, (sx, sy))
+        if self.obs_type == "cone":
+            surf.blit(OBSTACLE, (sx, sy))
 
-        elif self.obs_type == "cone":
-            # Traffic cone shape
-            cx = sx + self.w // 2
-            # base
-            pygame.draw.rect(surf, (220, 220, 220), (sx + 4, sy + self.h - 8, self.w - 8, 8))
+    def check_obstacle_collisions(car):
+        # Check car rect (world-space) vs all active obstacles.
+        car_world_rect = pygame.Rect(car.rect.x, car.rect.y,
+                                    car.rect.width, car.rect.height)
+        for obs in obstacles:
+            if not obs.active:
+                continue
+            if car_world_rect.colliderect(obs.rect) and obs.can_hit(car):
+                obs.apply_hit(car)
 
-            # body
-            points = [(cx, sy), (sx, sy + self.h - 8), (sx + self.w, sy + self.h - 8)]
-            pygame.draw.polygon(surf, CONE_COLOR, points)
+    def restore_speed_after_slow(car):
+        # Call every frame to let cars recover from obstacle slowdowns.
+        if hasattr(car, 'slow_until') and time.time() < car.slow_until:
+            # keep the slowed speed
+            pass
+        elif hasattr(car, 'slow_until') and time.time() >= car.slow_until:
+            # restore — actual speed is managed by move(); just clear the flag
+            del car.slow_until
+            if hasattr(car, 'slow_factor'):
+                del car.slow_factor
 
-            # white stripe
-            stripe_y = sy + self.h // 2
-            pygame.draw.polygon(
-                surf, WHITE,
-                [(cx - 6, stripe_y - 3),
-                 (cx + 6, stripe_y - 3),
-                 (sx + self.w - 4, stripe_y + 2),
-                 (sx + 4, stripe_y + 2)]
-            )
 
-        elif self.obs_type == "tire":
-            cx, cy = sx + self.w // 2, sy + self.h // 2
-            r = self.w // 2
-            pygame.draw.circle(surf, (80, 80, 80), (cx, cy), r, 3)
-            pygame.draw.circle(surf, (60, 60, 60), (cx, cy), r // 2)
-
-        elif self.obs_type == "bumb":
-            # Speed bumb - flat yellow/black stripe bar
-            bumpsurf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
-            strip_w = 10
-            for i in range(self.w // strip_w + 1):
-                color = YELLOW if i % 2 == 0 else BLACK
-                pygame.draw.rect(bumpsurf, color, (i * strip_w, 0, strip_w, self.h))
-            surf.blit(bumpsurf, (sx, sy))
-            pygame.draw.rect(surf, (180, 140, 0), (sx, sy, self.w, self.h), 2)
+    # Thin reflective top edge line
+    pygame.draw.line(screen, (255, 200, 200), (0, ROAD_TOP), (WIDTH, ROAD_TOP), 2)
+    pygame.draw.line(screen, (200, 200, 200),
+                     (0, ROAD_BOTTOM), (WIDTH, ROAD_BOTTOM), 2)
 
 
 def generate_obstacles(map_len, count=40):
-    """
-    Spread obstacle across the map, keeping the first
-    800px clear (start zone) and last 600px clear (finish zone).
-    """
+        # Spread obstacle across the map, keeping the first
+        # 800px clear (start zone) and last 600px clear (finish zone).
 
-    obstacles = []
-    safe_start = 800
-    safe_end = map_len - 600
-    if safe_end <= safe_start or count <= 0:
+        obstacles = []
+        safe_start = 800
+        safe_end = map_len - 600
+        if safe_end <= safe_start or count <= 0:
+            return obstacles
+
+        # Distribution evenly with slight randomness
+        segment = (safe_end - safe_start) / count
+        for i in range(count):
+            world_x = safe_start + i * segment + random.uniform(0, segment * 0.8)
+            obs_type = "cone"
+            obstacles.append(Obstacle(int(world_x), obs_type))
+
         return obstacles
-
-    # Distribution evenly with slight randomness
-    segment = (safe_end - safe_start) / count
-    for i in range(count):
-        world_x = safe_start + i * segment + random.uniform(0, segment * 0.8)
-        obs_type = random.choices(OBSTACLE_TYPES, weights=[30, 35, 20, 15], k=1)[0]
-        obstacles.append(Obstacle(int(world_x), obs_type))
-
-    return obstacles
-# Global obstacle list (regenerated each race)
-obstacles = []
-
-def check_obstacle_collisions(car):
-    """Check car rect (world-space) vs all active obstacles."""
-    car_world_rect = pygame.Rect(car.rect.x, car.rect.y,
-                                  car.rect.width, car.rect.height)
-    for obs in obstacles:
-        if not obs.active:
-            continue
-        if car_world_rect.colliderect(obs.rect) and obs.can_hit(car):
-            obs.apply_hit(car)
-
-def restore_speed_after_slow(car):
-    """Call every frame to let cars recover from obstacle slowdowns."""
-    if hasattr(car, 'slow_until') and time.time() < car.slow_until:
-        # keep the slowed speed
-        pass
-    elif hasattr(car, 'slow_until') and time.time() >= car.slow_until:
-        # restore — actual speed is managed by move(); just clear the flag
-        del car.slow_until
-        if hasattr(car, 'slow_factor'):
-            del car.slow_factor
-
-# BARRIER DRAWING
-
-BARRIER_SEGMENT_W = 40   # width of one barrier block
-
-def draw_barriers(surf, camera_x):
-    """
-    Draw animated red/white striped barriers at the top and bottom road edges.
-    They scroll with the camera and have a 3-D lip effect.
-    """
-    anim_offset = int(camera_x // 4) % (BARRIER_SEGMENT_W * 2)
-
-    for edge_y, is_top in [(ROAD_TOP, True), (ROAD_BOTTOM - BARRIER_THICKNESS, False)]:
-        # Draw enough segments to fill the screen
-        start_x = -(anim_offset % (BARRIER_SEGMENT_W * 2))
-        x = start_x
-        seg_idx = int(camera_x // BARRIER_SEGMENT_W)
-
-        while x < WIDTH:
-            # Alternate red/white
-            color = RED if (seg_idx % 2 == 0) else (240, 240, 240)
-            # Main barrier block
-            pygame.draw.rect(surf, color,
-                             (x, edge_y, BARRIER_SEGMENT_W, BARRIER_THICKNESS))
-            # Dark divider line
-            pygame.draw.rect(surf, DARK_GRAY, (x, edge_y, 2, BARRIER_THICKNESS))
-            # 3-D highlight on top of top barrier / shadow on bottom barrier
-            if is_top:
-                pygame.draw.rect(surf, WHITE, (x, edge_y, BARRIER_SEGMENT_W, 3))
-            else:
-                pygame.draw.rect(surf, DARK_GRAY, (x, edge_y + BARRIER_THICKNESS - 3,
-                                  BARRIER_SEGMENT_W, 3))
-            x += BARRIER_SEGMENT_W
-            seg_idx += 1
-
-    # Thin reflective top edge line
-    pygame.draw.line(surf, (255, 200, 200), (0, ROAD_TOP), (WIDTH, ROAD_TOP), 2)
-    pygame.draw.line(surf, (200, 200, 200),
-                     (0, ROAD_BOTTOM), (WIDTH, ROAD_BOTTOM), 2)
 
 # Minimal asset loader with fallback
 def load_img(path, size=None, alpha=True):
@@ -273,6 +196,8 @@ progress_bar = load_img("images/progress_bar.png", (500, 40))
 boost_gauge = load_img("images/boost_circle.png", (120, 120))
 player_frames = [load_img("images/Car_1.png", (60, 120))]
 enemy_frames = [load_img("Car_2.png", (60, 120))]
+main_menu_bg = load_img("images/bg_mainmenu.png", (WIDTH, HEIGHT))
+background = load_img("images/bg_plain.png", (WIDTH, HEIGHT))
 
 
 # Backgrounds (load safe)
@@ -363,10 +288,9 @@ def load_animation_frames_multi(base_name, size=(60,120), alpha=True):
     return frames
 
 def load_animation_frames_sheet(sheet_name, size=(60,120), alpha=True):
-    """
-    Load frames from a single image where frames are arranged horizontally.
-    Returns [] if sheet not found or cannot be split.
-    """
+    # Load frames from a single image where frames are arranged horizontally.
+    # Returns [] if sheet not found or cannot be split.
+
     if not os.path.exists(sheet_name):
         return []
     try:
@@ -428,7 +352,7 @@ class Car:
         self.energy = 100
         self.boosting = False
         self.base_speed = 4
-        self.boost_speed = 8
+        self.boost_speed = 10
         self.boost_cooldown = 0.0
         self.last_boost_time = 0.0
 
@@ -568,7 +492,7 @@ pause_bg_color = (40,40,40); pause_bg_padding = 8
 pause_bg_rect = pygame.Rect(pause_rect.left-pause_bg_padding, pause_rect.top-pause_bg_padding, pause_rect.width+pause_bg_padding*2, pause_rect.height+pause_bg_padding*2)
 
 def reset_game_state():
-    global game_over, new_race, camera_x, ai_difficulty, current_bg, finish_line_x
+    global game_over, new_race, camera_x, ai_difficulty, current_bg, finish_line_x, obstacles
     # Do NOT overwrite current_bg_idx or MAP_LEN here; keep whatever was selected.
     ai_difficulty = ai_difficulty  # keep existing difficulty
     game_over = False
@@ -582,6 +506,10 @@ def reset_game_state():
     player.boosting = enemy.boosting = False
     player.anim_index = 0.0; enemy.anim_index = 0.0
     player._last_frames_id = None; enemy._last_frames_id = None
+
+    obstacle_count = int(MAP_LEN / 1200) + random.randint(-3, 3)
+    obstacle_count = max(5, obstacle_count)
+    obstacles = generate_obstacles(MAP_LEN, obstacle_count)
     # ensure current background surface matches current_bg_idx
     try:
         current_bg = bg_images[current_bg_idx]
@@ -589,10 +517,8 @@ def reset_game_state():
         pass
 
 def start_race_with_selection(selected_map_idx=None, selected_length=None, selected_mode="AI", selected_diff="Normal", p_name="Player 1", e_name="Enemy"):
-    """
-    Apply selections (map index and track length) then reset and start the race.
-    Pass None for any selection you want to keep as-is.
-    """
+    # Apply selections (map index and track length) then reset and start the race.
+    # Pass None for any selection you want to keep as-is.
     global current_bg_idx, current_bg, MAP_LEN, mode, ai_difficulty, player, enemy, game_state
 
     # Apply map selection if provided
@@ -646,6 +572,7 @@ def scene_draw():
     pygame.draw.rect(screen, pause_bg_color, pause_bg_rect, border_radius=6); 
     screen.blit(pause_surf, pause_rect)
 
+
     
     if player.boosting or player.energy < 100: 
         boost_draw(player, HEIGHT//2-150)
@@ -680,13 +607,17 @@ def scene_draw():
     # Save visibility state
     finish_visible_last = visible
 
+    for obs in obstacles:
+        if obs.active:
+            obs.draw(screen, camera_x)
+
 # AI settings
 def ai_settings_for_difficulty(diff):
     if diff == "Easy":
         return {"speed_mult":1.30, "boost_chance":0.05, "boost_duration":0.8, "reaction":0.85}
     if diff == "Hard":
-        return {"speed_mult":1.50, "boost_chance":0.12, "boost_duration":2.0, "reaction":0.55}
-    return {"speed_mult":1.05, "boost_chance":0.08, "boost_duration":1.2, "reaction":0.75}
+        return {"speed_mult":1.50, "boost_chance":0.11, "boost_duration":2.0, "reaction":0.55}
+    return {"speed_mult":1.40, "boost_chance":0.08, "boost_duration":1.2, "reaction":0.75}
 
 # ---------------------------
 # Update (player + AI) — now accepts dt and advances animations
@@ -711,7 +642,13 @@ def update(keys, dt, spacebar_boost=False):
         if boosting:
             if not c.boosting:
                 c.start_boost_animation(loop_while_holding=True)
-            c.speed, c.energy, c.boosting = c.boost_speed, max(0, c.energy - 0.8), True
+            if hasattr(c, "slow_until") and time.time() < c.slow_until:
+                c.speed = c.boost_speed * getattr(c, "slow_factor", 1)
+            else:
+                c.speed = c.boost_speed
+
+            c.energy = max(0, c.energy - 0.8)
+            c.boosting = True
             try:
                 if not pygame.mixer.Channel(1).get_busy():
                     pygame.mixer.Channel(1).play(c.boost)
@@ -720,7 +657,12 @@ def update(keys, dt, spacebar_boost=False):
         else:
             if c.boosting:
                 c.stop_boost_animation()
-            c.speed, c.boosting = c.base_speed, False
+            if hasattr(c, "slow_until") and time.time() < c.slow_until:
+                c.speed = c.base_speed * getattr(c, "slow_factor", 1)
+            else:
+                c.speed = c.base_speed
+
+            c.boosting = False
             try:
                 if pygame.mixer.Channel(1).get_busy():
                     pygame.mixer.Channel(1).stop()
@@ -777,7 +719,7 @@ def update(keys, dt, spacebar_boost=False):
             ai_car.energy = min(100, ai_car.energy + 0.3)
         clamp_to_road(ai_car)
         ai_car.update_animation(dt)
-    # Patch: pass spacebar_boost to player move
+    # pass spacebar_boost to player move
     move(player, pygame.K_UP, pygame.K_DOWN, pygame.K_b, force_boost=spacebar_boost)
     if mode == "AI":
         ai_move(enemy, player, ai_difficulty)
@@ -787,9 +729,9 @@ def update(keys, dt, spacebar_boost=False):
     camera_x = player.rect.x - WIDTH // 2
 
     if player.rect.x >= MAP_LEN - player.rect.w:
-        game_over = True; winner_text = f"{player.name} WINS"; game_state = "postrace"; play_music(home_music)
+        game_over = True; winner_text = f"{player.name} WINS"; game_state = "postrace"; play_music(home_music); pygame.mixer.stop()
     if enemy.rect.x >= MAP_LEN - enemy.rect.w:
-        game_over = True; winner_text = f"{enemy.name} WINS"; game_state = "postrace"; play_music(home_music)
+        game_over = True; winner_text = f"{enemy.name} WINS"; game_state = "postrace"; play_music(home_music); pygame.mixer.stop()
 
 # --- END SPACEBAR BOOST PATCH ---
 
@@ -813,7 +755,7 @@ def countdown():
 def text_input(prompt):
     text = ""
     while True:
-        screen.fill(BLACK); screen.blit(font.render(prompt, 1, WHITE), (WIDTH//2 - font.size(prompt)[0]//2, HEIGHT//2 - 100))
+        screen.blit(background, (0,0)); screen.blit(font.render(prompt, 1, WHITE), (WIDTH//2 - font.size(prompt)[0]//2, HEIGHT//2 - 100))
         screen.blit(font.render(text[-25:], 1, (255,215,0)), font.render(text[-25:], 1, (255,215,0)).get_rect(center=(WIDTH//2, HEIGHT//2)))
         pygame.display.flip()
         for e in pygame.event.get():
@@ -828,7 +770,7 @@ def select_mode():
     options = ["1. VS AI", "2. VS Player"]
 
     while True:
-        screen.fill(BLACK)
+        screen.blit(background, (0,0));
         screen.blit(font.render("Choose Mode", True, WHITE),
                     (WIDTH//2 - 200, HEIGHT//2 - 160))
 
@@ -875,7 +817,7 @@ def select_mode():
 def difficulty_menu():
     options = ["1. Easy", "2. Normal", "3. Hard", "4. Cancel"]
     while True:
-        screen.fill(BLACK); screen.blit(font.render("Select AI Difficulty", 1, WHITE), (WIDTH//2 - 300, 40))
+        screen.blit(background, (0,0)); screen.blit(font.render("Select AI Difficulty", 1, WHITE), (WIDTH//2 - 300, 40))
 
         rects = draw_options(options, WIDTH//2 - 150, 200); pygame.display.flip()
         pygame.display.flip()
@@ -907,7 +849,7 @@ def map_select_menu():
     rows = (len(bg_thumbs) + per_row - 1) // per_row
     content_h = sy + rows * (thumb_h + 40); visible_h = HEIGHT - 160; max_scroll = max(0, content_h - visible_h)
     while True:
-        screen.fill(BLACK); screen.blit(font.render("CHOOSE MAP", 1, WHITE), (WIDTH//2 - 200, 40))
+        screen.blit(background, (0,0)); screen.blit(font.render("CHOOSE MAP", 1, WHITE), (WIDTH//2 - 200, 40))
         thumb_rects = []
         for i, thumb in enumerate(bg_thumbs):
             row = i // per_row; col = i % per_row
@@ -952,7 +894,7 @@ def track_length_menu():
     maps = ["1. Short Track (5000m)", "2. Medium Track (20000m)", "3. Long Track (40000m)"]
     lengths = [5000, 20000, 40000]
     while True:
-        screen.fill(BLACK); screen.blit(font.render("CHOOSE TRACK LENGTH", 1, WHITE), (WIDTH//2 - 300, 40))
+        screen.blit(background, (0,0)); screen.blit(font.render("CHOOSE TRACK LENGTH", 1, WHITE), (WIDTH//2 - 300, 40))
         rects = draw_options(maps + ["4. Custom length (meters)", "5. Cancel"], WIDTH//2 - 150, 160)
         screen.blit(sfont.render("Choose length or press ESC to cancel. Click outside to go back.", 1, (180,180,180)), (WIDTH//2 - 350, HEIGHT-60))
         pygame.display.flip()
@@ -992,7 +934,7 @@ def car_select_menu(two_player=False):
     scroll_y = 0; scroll_speed = 40; rows = (len(thumbs) + cols - 1) // cols
     content_h = start_y + rows * (thumb_h + 60); visible_h = HEIGHT - 200; max_scroll = max(0, content_h - visible_h)
     while True:
-        screen.fill(BLACK); screen.blit(font.render("CHOOSE CARS", 1, WHITE), (WIDTH//2 - 200, 40))
+        screen.blit(background, (0,0)); screen.blit(font.render("CHOOSE CARS", 1, WHITE), (WIDTH//2 - 200, 40))
         screen.blit(sfont.render("Select Player car, then select Opponent car. ESC to cancel.", 1, (200,200,200)), (WIDTH//2 - 300, HEIGHT-60))
         rects = []
         for i, thumb in enumerate(thumbs):
@@ -1068,7 +1010,8 @@ def draw_options(options, start_x, start_y, spacing=50):
 
 
 def draw_options_screen():
-    title = font.render("OPTIONS", True, WHITE)
+    screen.blit(background, (0,0))
+    title = font.render("SETTINS", True, WHITE)
     screen.blit(title, (WIDTH//2 - 80, 100))
     vol_text = font.render(f"Volume: {int(music_volume*100)}%", True, WHITE)
     screen.blit(vol_text, (WIDTH//2 - 100, 200))
@@ -1087,10 +1030,11 @@ def options_menu():
     dragging = False
 
     while running:
-        screen.fill((30, 30, 30))
+        screen.blit(background, (0,0))
 
         title = font.render("OPTIONS", True, WHITE)
-        screen.blit(title, (WIDTH//2 - 80, 100))
+        title_rect = title.get_rect(center=(WIDTH // 2, 100))
+        screen.blit(title, title_rect)
 
         # Slider positions
         bar_x = WIDTH//2 - 150
@@ -1116,6 +1060,9 @@ def options_menu():
                     (WIDTH//2 - 150, 420))
 
         pygame.display.update()
+
+        Obstacle.check_obstacle_collisions(player)
+        Obstacle.check_obstacle_collisions(enemy)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -1223,9 +1170,13 @@ def draw_finish_line(tile_size=20, cols=6, rows=4, offset=0):
 def main_menu():
     global game_state, MAP_LEN, new_race, mode, ai_difficulty, player, enemy, current_bg_idx, current_bg
     play_music(home_music)
-    menu_options = ["1. Start Game", "2. Options", "3. Quit"]
+    menu_options = ["1. Start Game", "2. Settings", "3. Quit"]
     while game_state == "menu":
-        screen.fill(BLACK); screen.blit(font.render("PIXEL VELOCITY", 1, WHITE), (WIDTH//2 - 250, 100))
+        screen.blit(background, (0,0))
+        title = font.render("PIXEL VELOCITY", True, (255, 215, 0))
+        title_rect = title.get_rect(center=(WIDTH // 2, 100))
+        screen.blit(title, title_rect)
+
         rects = draw_options(menu_options, WIDTH//2 - 150, 250); pygame.display.flip()
         for e in pygame.event.get():
             if e.type == pygame.QUIT: 
@@ -1257,7 +1208,7 @@ def main_menu():
 def pause_menu():
     play_music(pause_music)
     while True:
-        screen.fill(BLACK); screen.blit(font.render("PAUSED", 1, WHITE), (WIDTH//2 - 150, HEIGHT//2 - 80))
+        screen.blit(background, (0,0)); screen.blit(font.render("PAUSED", 1, WHITE), (WIDTH//2 - 150, HEIGHT//2 - 80))
         screen.blit(sfont.render("Press P to resume or ESC to quit to menu", 1, (200,200,200)), (WIDTH//2 - 260, HEIGHT//2 + 20))
         pygame.display.flip()
 
@@ -1275,6 +1226,7 @@ def pause_menu():
 def postrace_menu():
     global game_state
     while True:
+        
         screen.fill(BLACK); screen.blit(font.render("RACE OVER", 1, WHITE), (WIDTH//2 - 220, 80))
         screen.blit(sfont.render(winner_text, 1, (255,215,0)), (WIDTH//2 - 100, 180))
         rects = draw_options(["1. Play Again", "2. Main Menu", "3. Quit"], WIDTH//2 - 150, 260)
@@ -1311,7 +1263,7 @@ def main():
         if game_state == "menu":
             main_menu()
         elif game_state == "race":
-            dt = clock.tick(60) / 1000.0
+            dt = clock.tick(120) / 1000.0
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     pygame.quit()
@@ -1335,6 +1287,13 @@ def main():
             keys = pygame.key.get_pressed()
             # Patch: pass spacebar boost to update
             update(keys, dt, spacebar_boost=player_spacebar_boost)
+
+            Obstacle.check_obstacle_collisions(player)
+            Obstacle.check_obstacle_collisions(enemy)
+
+            Obstacle.restore_speed_after_slow(player)
+            Obstacle.restore_speed_after_slow(enemy)
+
             scene_draw()
             pygame.display.flip()
             if game_state == "postrace":
